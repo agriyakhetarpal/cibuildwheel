@@ -1,0 +1,269 @@
+name: Pyodide pkg-config
+
+# Builds real projects for Pyodide with the released pyodide-build and with the
+# pyodide-build commit under test, on hosts where a Python of the same minor
+# version as the target has a pkg-config file that the build can find.
+#
+# Every cell runs both variants, so a cell reads as:
+#   released fails,  pr passes: fixed
+#   released passes, pr passes: no regression
+#   released fails,  pr fails:  unrelated to pyodide-build, if the error is the same
+#   released passes, pr fails:  regression
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYODIDE_BUILD_PR: git+https://github.com/pyodide/pyodide-build@b40e975fb79cea1193fe7ffb66e2dd17272619e7
+
+jobs:
+  build:
+    name: ${{ matrix.project }}, ${{ matrix.cell }}, ${{ matrix.pyodide-build }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [numpy, scipy, pywt, matplotlib]
+        cell:
+          # The system Python has the same minor version as the target
+          - ubuntu-26.04-cp314-system
+          - ubuntu-24.04-cp312-system
+          - macos-latest-cp314-system
+          # actions/setup-python at the minor version of the target
+          - ubuntu-24.04-cp313-setup-python
+          - ubuntu-24.04-cp314-setup-python
+          - ubuntu-22.04-cp312-setup-python
+          - macos-latest-cp313-setup-python
+          - ubuntu-24.04-cp315-setup-python
+          # No host Python of the same minor version
+          - ubuntu-22.04-cp313-system
+          - ubuntu-24.04-cp314-system
+          - ubuntu-24.04-cp315-system
+        pyodide-build: [released, pr]
+        exclude:
+          - project: matplotlib
+            cell: ubuntu-24.04-cp315-setup-python
+          - project: matplotlib
+            cell: ubuntu-24.04-cp315-system
+          # SciPy only builds cp314 for Pyodide in its own CI
+          - project: scipy
+            cell: ubuntu-24.04-cp312-system
+          - project: scipy
+            cell: ubuntu-24.04-cp313-setup-python
+          - project: scipy
+            cell: ubuntu-22.04-cp312-setup-python
+          - project: scipy
+            cell: macos-latest-cp313-setup-python
+          - project: scipy
+            cell: ubuntu-24.04-cp315-setup-python
+          - project: scipy
+            cell: ubuntu-22.04-cp313-system
+          - project: scipy
+            cell: ubuntu-24.04-cp315-system
+        include:
+          - project: numpy
+            repository: numpy/numpy
+            ref: 768d7ef361e0207a24faf3783d5f668a0f137d46
+            smoke-test: >-
+              python -c "import numpy; print(numpy.__version__, numpy.arange(6).reshape(2, 3).sum())"
+          - project: scipy
+            repository: scipy/scipy
+            ref: 3410f4ac2f149e445c874d29805280ae9a095b8d
+            smoke-test: >-
+              python -c "import scipy, scipy.linalg, scipy.special, scipy.sparse; print(scipy.__version__, scipy.linalg.det([[1, 2], [3, 4]]))"
+          - project: pywt
+            repository: PyWavelets/pywt
+            ref: 5d842899b92faca0aade4932f0c90a40f66ceea3
+            smoke-test: >-
+              python -c "import pywt; print(pywt.__version__, pywt.dwt([1, 2, 3, 4], 'db1'))"
+          - project: matplotlib
+            repository: matplotlib/matplotlib
+            ref: 9c5d21806b9aaf8d24e05979a45a2d395d15edc3
+            smoke-test: >-
+              python -c "import matplotlib, matplotlib.pyplot, matplotlib.ft2font, matplotlib._path, matplotlib._image; print(matplotlib.__version__)"
+
+          - cell: ubuntu-26.04-cp314-system
+            os: ubuntu-26.04
+            target: cp314
+            host: system
+          - cell: ubuntu-24.04-cp312-system
+            os: ubuntu-24.04
+            target: cp312
+            host: system
+          - cell: macos-latest-cp314-system
+            os: macos-latest
+            target: cp314
+            host: system
+          - cell: ubuntu-24.04-cp313-setup-python
+            os: ubuntu-24.04
+            target: cp313
+            host: setup-python
+            python: "3.13"
+          - cell: ubuntu-24.04-cp314-setup-python
+            os: ubuntu-24.04
+            target: cp314
+            host: setup-python
+            python: "3.14"
+          - cell: ubuntu-22.04-cp312-setup-python
+            os: ubuntu-22.04
+            target: cp312
+            host: setup-python
+            python: "3.12"
+          - cell: macos-latest-cp313-setup-python
+            os: macos-latest
+            target: cp313
+            host: setup-python
+            python: "3.13"
+          - cell: ubuntu-24.04-cp315-setup-python
+            os: ubuntu-24.04
+            target: cp315
+            host: setup-python
+            python: "3.15"
+          - cell: ubuntu-22.04-cp313-system
+            os: ubuntu-22.04
+            target: cp313
+            host: system
+          - cell: ubuntu-24.04-cp314-system
+            os: ubuntu-24.04
+            target: cp314
+            host: system
+          - cell: ubuntu-24.04-cp315-system
+            os: ubuntu-24.04
+            target: cp315
+            host: system
+
+          # The test suite that the project configures, where the others only
+          # import the wheel
+          - project: numpy
+            cell: ubuntu-26.04-cp314-system
+            pyodide-build: pr
+            tests: full
+          - project: scipy
+            cell: ubuntu-26.04-cp314-system
+            pyodide-build: pr
+            tests: full
+          - project: pywt
+            cell: ubuntu-26.04-cp314-system
+            pyodide-build: pr
+            tests: full
+          - project: numpy
+            cell: ubuntu-24.04-cp313-setup-python
+            pyodide-build: pr
+            tests: full
+          - project: pywt
+            cell: ubuntu-24.04-cp313-setup-python
+            pyodide-build: pr
+            tests: full
+          - project: numpy
+            cell: ubuntu-24.04-cp312-system
+            pyodide-build: pr
+            tests: full
+          - project: pywt
+            cell: ubuntu-24.04-cp312-system
+            pyodide-build: pr
+            tests: full
+
+    env:
+      CIBW_PLATFORM: pyodide
+      CIBW_BUILD: ${{ matrix.target }}-pyodide_wasm32
+      CIBW_ENABLE: pyodide-prerelease pyodide-eol cpython-prerelease
+      CIBW_BUILD_VERBOSITY: 1
+
+    steps:
+      # The project sits at the root of the workspace, as in its own CI,
+      # because its configuration resolves paths from the working directory
+      - name: Check out ${{ matrix.project }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
+          submodules: recursive
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out cibuildwheel
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .cibuildwheel
+          persist-credentials: false
+
+      - name: Use the pyodide-build commit under test
+        if: matrix.pyodide-build == 'pr'
+        run: |
+          for file in .cibuildwheel/cibuildwheel/resources/constraints-pyodide3*.txt; do
+            sed -i.bak -e "s|^pyodide-build==.*|pyodide-build @ ${PYODIDE_BUILD_PR}|" "${file}"
+            rm "${file}.bak"
+            grep -H '^pyodide-build' "${file}"
+          done
+
+      - name: Configure cibuildwheel
+        run: |
+          echo "CIBW_CACHE_PATH=${RUNNER_TEMP}/cibw-cache" >> "${GITHUB_ENV}"
+          if [ "${TESTS}" != "full" ]; then
+            echo "CIBW_TEST_COMMAND=${SMOKE_TEST}" >> "${GITHUB_ENV}"
+          fi
+        env:
+          TESTS: ${{ matrix.tests }}
+          SMOKE_TEST: ${{ matrix.smoke-test }}
+
+      - name: Set up Python ${{ matrix.python }}
+        if: matrix.host == 'setup-python'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Show the Python pkg-config files that the host offers
+        run: |
+          echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}"
+          for version in 3.12 3.13 3.14 3.15; do
+            if pkg-config --exists "python-${version}"; then
+              echo "python-${version}: $(pkg-config --cflags "python-${version}")"
+            else
+              echo "python-${version}: not found"
+            fi
+          done
+
+      - name: Build with the cibuildwheel action
+        if: matrix.host == 'system'
+        uses: ./.cibuildwheel
+
+      - name: Build with python -m cibuildwheel
+        if: matrix.host == 'setup-python'
+        run: |
+          python -m pip install ./.cibuildwheel
+          python -m cibuildwheel --output-dir wheelhouse
+
+      - name: Show what the build found
+        if: always()
+        run: |
+          echo "::group::Python pkg-config files in the cross-build environment"
+          if [ -d "${CIBW_CACHE_PATH}" ]; then
+            find "${CIBW_CACHE_PATH}" -path '*lib/pkgconfig/python*.pc' -print -exec cat {} \;
+          fi
+          echo "::endgroup::"
+          # NumPy and SciPy keep their build directory
+          for log in build/meson-logs/meson-log.txt build/pyodide/meson-logs/meson-log.txt; do
+            if [ -f "${log}" ]; then
+              echo "::group::${log}"
+              grep -E 'env\[PKG_CONFIG_(PATH|LIBDIR)\]|pkg-config (--cflags|--libs) python|^-I.*python3|Has header "Python.h"|python dependency found' "${log}" | sort -u
+              echo "::endgroup::"
+            fi
+          done
+          ls -l wheelhouse 2>/dev/null || true
+
+      - name: Upload the wheel
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.project }}-${{ matrix.cell }}-${{ matrix.pyodide-build }}
+          path: wheelhouse/*.whl
+          if-no-files-found: ignore
