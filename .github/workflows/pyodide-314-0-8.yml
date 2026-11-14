@@ -1,0 +1,204 @@
+name: Pyodide 314.0.8
+
+# Builds NumPy, SciPy, and PyWavelets for Pyodide on ubuntu-26.04 with the
+# released cibuildwheel, set up as in each project's own workflow, on the two
+# hosts where the build can find a pkg-config file for a host Python 3.14.
+#
+# Every cell runs three variants:
+#   released:        cibuildwheel as released (Pyodide 314.0.7, pyodide-build 0.39.3)
+#   pyodide-314.0.8: the same with Pyodide 314.0.8
+#   pyodide-314.0.8-pr: Pyodide 314.0.8 and the pyodide-build commit under test
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYODIDE_BUILD_PR: git+https://github.com/pyodide/pyodide-build@63111b4861c8802d455497a457534cc5ce4ee6fd
+
+jobs:
+  build:
+    name: ${{ matrix.project }}, ${{ matrix.host }}, ${{ matrix.variant }}
+    runs-on: ubuntu-26.04
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        project: [numpy, scipy, pywt]
+        host:
+          # The cibuildwheel action, with the Python 3.14 of the runner image
+          - system
+          # actions/setup-python at 3.14, then python -m cibuildwheel
+          - setup-python
+        variant: [released, pyodide-314.0.8, pyodide-314.0.8-pr]
+        include:
+          - project: numpy
+            repository: numpy/numpy
+            ref: 05cebbc66d5093d961bc9d8cacd673e131b9a266
+            submodules: recursive
+            fetch-tags: true
+          - project: scipy
+            repository: scipy/scipy
+            ref: d2fcae24ac416a12ee9c9c1a5d2d1a6eb76fae16
+            submodules: recursive
+            fetch-tags: false
+          - project: pywt
+            repository: PyWavelets/pywt
+            ref: 5d842899b92faca0aade4932f0c90a40f66ceea3
+            submodules: false
+            fetch-tags: false
+
+          - variant: released
+            pyodide-version: ""
+            pyodide-build: released
+          - variant: pyodide-314.0.8
+            pyodide-version: 314.0.8
+            pyodide-build: released
+          - variant: pyodide-314.0.8-pr
+            pyodide-version: 314.0.8
+            pyodide-build: pr
+
+    steps:
+      # The project sits at the root of the workspace, as in its own CI,
+      # because its configuration resolves paths from the working directory
+      - name: Check out ${{ matrix.project }}
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.ref }}
+          submodules: ${{ matrix.submodules }}
+          fetch-tags: ${{ matrix.fetch-tags }}
+          persist-credentials: false
+
+      - name: Check out cibuildwheel v4.3.5
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: pypa/cibuildwheel
+          ref: f9b966cfadf4109556cadc5bb39ddb72d0ce664e # v4.3.5
+          path: .cibuildwheel
+          persist-credentials: false
+
+      - name: Use the pyodide-build commit under test
+        if: matrix.pyodide-build == 'pr'
+        run: |
+          for file in .cibuildwheel/cibuildwheel/resources/constraints-pyodide3*.txt; do
+            sed -i.bak -e "s|^pyodide-build==.*|pyodide-build @ ${PYODIDE_BUILD_PR}|" "${file}"
+            rm "${file}.bak"
+          done
+
+      - name: Show the pyodide-build that cibuildwheel will install
+        run: grep -H '^pyodide-build' .cibuildwheel/cibuildwheel/resources/constraints-pyodide3*.txt
+
+      # The environment that the project's own workflow sets for the build
+      - name: Configure the build as NumPy does
+        if: matrix.project == 'numpy'
+        run: |
+          {
+            echo "FORCE_COLOR=3"
+            echo "CIBW_PLATFORM=pyodide"
+            echo "CIBW_BUILD=cp314-pyodide_wasm32"
+            echo "CIBW_ENABLE=pyodide-prerelease"
+            echo "CIBW_BUILD_VERBOSITY=3"
+          } >> "${GITHUB_ENV}"
+
+      - name: Configure the build as SciPy does
+        if: matrix.project == 'scipy'
+        run: |
+          {
+            echo "FORCE_COLOR=3"
+            echo "CCACHE_DIR=${GITHUB_WORKSPACE}/.ccache"
+            echo "CCACHE_MAXSIZE=300M"
+            echo "CIBW_PLATFORM=pyodide"
+            echo "CIBW_BUILD=cp314-pyodide_wasm32"
+            echo "CIBW_BUILD_VERBOSITY=1"
+            echo "EM_COMPILER_WRAPPER=ccache"
+            echo "CCACHE_COMPILERCHECK=%compiler% --version"
+          } >> "${GITHUB_ENV}"
+
+      # PyWavelets sets the platform only. The target is added here because
+      # one Pyodide version can only build for one Python version.
+      - name: Configure the build as PyWavelets does
+        if: matrix.project == 'pywt'
+        run: |
+          {
+            echo "FORCE_COLOR=3"
+            echo "CIBW_PLATFORM=pyodide"
+            echo "CIBW_BUILD=cp314-pyodide_wasm32"
+          } >> "${GITHUB_ENV}"
+
+      - name: Install ccache
+        if: matrix.project == 'scipy'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ccache
+
+      - name: Set up ccache
+        if: matrix.project == 'scipy'
+        uses: ./.github/ccache
+        with:
+          workflow_name: ${{ github.workflow }}
+          job_name: ${{ github.job }}
+
+      - name: Use Pyodide ${{ matrix.pyodide-version }}
+        if: matrix.pyodide-version != ''
+        run: echo "CIBW_PYODIDE_VERSION=${PYODIDE_VERSION}" >> "${GITHUB_ENV}"
+        env:
+          PYODIDE_VERSION: ${{ matrix.pyodide-version }}
+
+      - name: Set up Python 3.14
+        if: matrix.host == 'setup-python'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+
+      - name: Show the Python pkg-config files that the host offers
+        run: |
+          echo "PKG_CONFIG_PATH=${PKG_CONFIG_PATH:-}"
+          for version in 3.12 3.13 3.14 3.15; do
+            if pkg-config --exists "python-${version}"; then
+              echo "python-${version}: $(pkg-config --cflags "python-${version}")"
+            else
+              echo "python-${version}: not found"
+            fi
+          done
+
+      - name: Build with the cibuildwheel action
+        if: matrix.host == 'system'
+        uses: ./.cibuildwheel
+
+      - name: Build with python -m cibuildwheel
+        if: matrix.host == 'setup-python'
+        run: |
+          python -m pip install ./.cibuildwheel
+          python -m cibuildwheel --output-dir wheelhouse
+
+      - name: Show what the build found
+        if: always()
+        run: |
+          echo "::group::Python pkg-config files in the cross-build environments"
+          find "${HOME}/.cache" "${RUNNER_TEMP}" -path '*lib/pkgconfig/python*.pc' -print -exec cat {} \; 2>/dev/null || true
+          echo "::endgroup::"
+          # NumPy and SciPy keep their build directory
+          for log in build/meson-logs/meson-log.txt build/pyodide/meson-logs/meson-log.txt; do
+            if [ -f "${log}" ]; then
+              echo "::group::${log}"
+              grep -E 'env\[PKG_CONFIG_(PATH|LIBDIR)\]|pkg-config (--cflags|--libs) python|^-I.*python3|Has header "Python.h"|python dependency found' "${log}" | sort -u
+              echo "::endgroup::"
+            fi
+          done
+          ls -l wheelhouse 2>/dev/null || true
+
+      - name: Upload the wheel
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.project }}-${{ matrix.host }}-${{ matrix.variant }}
+          path: wheelhouse/*.whl
+          if-no-files-found: ignore
